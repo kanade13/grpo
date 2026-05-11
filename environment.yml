@@ -1,0 +1,38 @@
+name: grpo
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - setuptools
+  - wheel
+  - numpy<2
+  - pytorch=2.5.*
+  - torchvision=0.20.*
+  - torchaudio=2.5.*
+  - pytorch-cuda=12.1
+  - pandas
+  - pyarrow
+  - matplotlib
+  - pyyaml
+  - psutil
+  - sentencepiece
+  - safetensors
+  - tqdm
+  - ipykernel
+  - pip:
+      - transformers>=4.46,<5
+      - datasets>=2.21,<4
+      - accelerate>=1.0,<2
+      - trl>=0.11,<2
+      - peft>=0.13,<1
+      - pytest>=8,<9
+      - ruff>=0.8,<1
+      - tensorboard>=2.18,<3
+      - rich>=13,<14
+      - einops>=0.8,<1
+variables:
+  PYTHONNOUSERSITE: "1"

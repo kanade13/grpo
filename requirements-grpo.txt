@@ -1,0 +1,17 @@
+numpy<2
+transformers
+datasets
+accelerate
+trl
+peft
+sentencepiece
+tqdm
+ipykernel
+matplotlib
+pyyaml
+psutil
+pytest>=8,<9
+ruff>=0.8,<1
+tensorboard>=2.18,<3
+rich>=13,<14
+einops>=0.8,<1
