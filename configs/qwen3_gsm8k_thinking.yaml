@@ -1,0 +1,27 @@
+model:
+  path: ./models/Qwen3-0.6B
+  torch_dtype: auto
+  device_map: auto
+
+generation:
+  enable_thinking: true
+  max_new_tokens: 2048
+  do_sample: true
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  min_p: 0
+
+prompt:
+  template: |-
+    {question}
+    Please reason step by step, and put your final answer within \boxed{{}}.
+
+data:
+  path: ./data/gsm8k/test.jsonl
+
+eval:
+  limit: null
+  batch_size: 6
+  output_mode: summary
+  output_path: ./runs/qwen3_gsm8k_thinking.jsonl

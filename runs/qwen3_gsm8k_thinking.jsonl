@@ -1,0 +1,11 @@
+{
+  "total": 18,
+  "correct": 8,
+  "accuracy": 0.4444444444444444,
+  "batch_size": 6,
+  "max_new_tokens_reached": 9,
+  "cuda_peak_memory_allocated_bytes": 2827699200,
+  "cuda_peak_memory_allocated_mib": 2696.7,
+  "cuda_peak_memory_reserved_bytes": 4211081216,
+  "cuda_peak_memory_reserved_mib": 4016.0
+}
