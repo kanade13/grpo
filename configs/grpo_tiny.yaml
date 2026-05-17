@@ -1,0 +1,36 @@
+model:
+  path: ./models/Qwen3-0.6B
+  torch_dtype: auto
+  device_map: auto
+
+generation:
+  enable_thinking: false
+  max_new_tokens: 256
+  do_sample: true
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  min_p: 0
+
+prompt:
+  template: |-
+    {question}
+    Please reason step by step, and put your final answer within \boxed{{}}.
+
+data:
+  train_path: ./data/gsm8k/train.jsonl
+  train_split: train
+  train_limit: 16
+
+train:
+  output_dir: ./runs/grpo_tiny
+  max_steps: 1
+  prompt_batch_size: 2
+  group_size: 4
+  learning_rate: 0.000001
+  weight_decay: 0.0
+  clip_eps: 0.2
+  beta: 0.01
+  max_grad_norm: 1.0
+  reference_model_enabled: false
+  log_every: 1
