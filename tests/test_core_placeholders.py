@@ -6,7 +6,6 @@ from src.kl import compute_k3_kl
 from src.logprobs import compute_token_logprobs
 from src.losses import compute_grpo_loss
 from src.masks import build_response_mask
-from src.rollout import generate_group_rollouts
 
 
 def test_core_algorithm_functions_are_explicit_placeholders() -> None:
@@ -40,7 +39,3 @@ def test_core_algorithm_functions_are_explicit_placeholders() -> None:
             clip_eps=0.2,
             beta=0.01,
         )
-
-    with pytest.raises(NotImplementedError):
-        generate_group_rollouts(model_runner=None, examples=[], group_size=2)
-

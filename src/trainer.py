@@ -18,7 +18,14 @@ from .masks import build_response_mask
 from .model_runner import ModelRunner
 from .optim import build_adam_optimizer
 from .rollout import generate_group_rollouts
-from .types import GeneratedCompletion, PromptRollout, TokenizedRolloutBatch, TrainMetrics
+from .types import (
+    GSM8KExample,
+    GeneratedCompletion,
+    LogProbResult,
+    PromptRollout,
+    TokenizedRolloutBatch,
+    TrainMetrics,
+)
 
 
 @dataclass
@@ -72,7 +79,7 @@ def load_training_config(path: str | Path) -> dict[str, Any]:
     return config
 
 
-def build_reference_model(policy_runner: ModelRunner):
+def build_reference_model(policy_runner: ModelRunner) -> torch.nn.Module:
     """加载冻结 reference model。
 
     这是边缘逻辑，不属于你后面要手写的核心算法。默认从同一个 `model.path`
@@ -103,15 +110,14 @@ def flatten_rollouts(rollouts: list[PromptRollout]) -> list[GeneratedCompletion]
 def build_advantage_lookup(rollouts: list[PromptRollout]) -> dict[tuple[str, int], tuple[float, float]]:
     lookup: dict[tuple[str, int], tuple[float, float]] = {}
     for rollout in rollouts:
-        rewards = torch.tensor(
-            [
-                completion.reward.total_reward
-                if completion.reward is not None
-                else float(completion.metadata.get("reward", 0.0))
-                for completion in rollout.completions
-            ],
-            dtype=torch.float32,
-        )
+        reward_values: list[float] = []
+        for completion in rollout.completions:
+            if completion.reward is None:
+                raise ValueError(
+                    f"Completion {completion.prompt_id}/{completion.completion_id} is missing reward."
+                )
+            reward_values.append(completion.reward.total_reward)
+        rewards = torch.tensor(reward_values, dtype=torch.float32)
         group_advantage = compute_group_advantages(rollout.prompt_id, rewards)
         for completion, reward, advantage in zip(
             rollout.completions,
@@ -124,15 +130,36 @@ def build_advantage_lookup(rollouts: list[PromptRollout]) -> dict[tuple[str, int
 
 
 def tokenize_rollout_batch(
-    tokenizer,
+    tokenizer: Any,
     completions: list[GeneratedCompletion],
     advantage_lookup: dict[tuple[str, int], tuple[float, float]],
     device: torch.device,
 ) -> TokenizedRolloutBatch:
-    texts = [completion.prompt + completion.response for completion in completions]
-    prompts = [completion.prompt for completion in completions]
-    tokenized = tokenizer(texts, return_tensors="pt", padding=True).to(device)
-    prompt_tokenized = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+    if tokenizer.pad_token_id is None:
+        raise ValueError("tokenizer.pad_token_id must be set before training.")
+    if not completions:
+        raise ValueError("Cannot tokenize an empty rollout batch.")
+
+    input_id_rows: list[torch.Tensor] = []
+    prompt_lengths: list[int] = []
+    for completion in completions:
+        if completion.input_ids is None:
+            raise ValueError(
+                f"Completion {completion.prompt_id}/{completion.completion_id} is missing input_ids."
+            )
+        if completion.prompt_token_count is None:
+            raise ValueError(
+                f"Completion {completion.prompt_id}/{completion.completion_id} is missing prompt_token_count."
+            )
+        input_id_rows.append(torch.tensor(completion.input_ids, dtype=torch.long))
+        prompt_lengths.append(completion.prompt_token_count)
+
+    input_ids = torch.nn.utils.rnn.pad_sequence(
+        input_id_rows,
+        batch_first=True,
+        padding_value=tokenizer.pad_token_id,
+    ).to(device)
+    attention_mask = (input_ids != tokenizer.pad_token_id).long()
 
     rewards: list[float] = []
     advantages: list[float] = []
@@ -142,10 +169,10 @@ def tokenize_rollout_batch(
         advantages.append(advantage)
 
     return TokenizedRolloutBatch(
-        input_ids=tokenized.input_ids,
-        attention_mask=tokenized.attention_mask,
-        labels=tokenized.input_ids.clone(),
-        prompt_lengths=prompt_tokenized.attention_mask.sum(dim=1),
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        labels=input_ids.clone(),
+        prompt_lengths=torch.tensor(prompt_lengths, dtype=torch.long, device=device),
         advantages=torch.tensor(advantages, dtype=torch.float32, device=device),
         rewards=torch.tensor(rewards, dtype=torch.float32, device=device),
         prompt_ids=[completion.prompt_id for completion in completions],
@@ -153,7 +180,11 @@ def tokenize_rollout_batch(
     )
 
 
-def compute_model_logprobs(model, rollout_batch: TokenizedRolloutBatch, pad_token_id: int):
+def compute_model_logprobs(
+    model: torch.nn.Module,
+    rollout_batch: TokenizedRolloutBatch,
+    pad_token_id: int,
+) -> LogProbResult:
     response_mask = build_response_mask(
         rollout_batch.input_ids,
         rollout_batch.prompt_lengths,
@@ -163,14 +194,18 @@ def compute_model_logprobs(model, rollout_batch: TokenizedRolloutBatch, pad_toke
         input_ids=rollout_batch.input_ids,
         attention_mask=rollout_batch.attention_mask,
     )
-    return compute_token_logprobs(outputs.logits, rollout_batch.labels, response_mask)
+    return compute_token_logprobs(
+        outputs.logits[:, :-1, :],
+        rollout_batch.labels[:, 1:],
+        response_mask[:, 1:],
+    )
 
 
 def run_train_step(
     policy_runner: ModelRunner,
-    reference_model,
+    reference_model: torch.nn.Module | None,
     optimizer: torch.optim.Optimizer,
-    examples,
+    examples: list[GSM8KExample],
     train_cfg: TrainingConfig,
     step: int,
 ) -> TrainMetrics:
@@ -310,4 +345,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

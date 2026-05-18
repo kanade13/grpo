@@ -25,7 +25,7 @@
 | Day | 实现什么功能 | 如何测试 | 完成情况 |
 | --- | --- | --- | --- |
 | Day 1 | 完成模型加载与调用代码，与测评代码。包括 `ModelRunner`、Qwen3 thinking/non-thinking 配置、GSM8K test 评测、批量生成、summary/details 输出和基础解析测试。 | 运行 `python3 -m pytest tests/test_gsm8k_eval.py tests/test_model_runner.py -q`、`python3 -m ruff check src tests`，并用 `python3 -m src.gsm8k_eval --config configs/qwen3_gsm8k_non_thinking.yaml --limit 32` 做小样本评测。 | 已完成 |
-| Day 2 | 实现 `generate_group_rollouts`。对每个 `GSM8KExample` 生成 `group_size` 个 completion，封装为 `PromptRollout` / `GeneratedCompletion`，并调用 `compute_gsm8k_reward` 写入 reward。 | 新增 rollout 单元测试，使用 fake `ModelRunner` 返回固定 completion；确认 prompt 数量、每组 completion 数量、reward、token ids、metadata 都正确。 | TODO |
+| Day 2 | 实现 `generate_group_rollouts`。对每个 `GSM8KExample` 生成 `group_size` 个 completion，封装为 `PromptRollout` / `GeneratedCompletion`，并调用 `compute_gsm8k_reward` 写入 reward。 | 新增 rollout 单元测试，使用 fake `ModelRunner` 返回固定 completion；确认 prompt 数量、每组 completion 数量、reward、token ids、metadata 都正确。 | 已完成 |
 | Day 3 | 实现 `compute_group_advantages`。对每个 prompt group 的 reward 做均值、标准差和 advantage 计算。 | 新增 advantage 单元测试，覆盖普通 reward、全相等 reward、单元素 group、负 reward；确认全相等时 advantages 为 0。 | TODO |
 | Day 4 | 实现 `build_response_mask`。构造只覆盖 response tokens 的 mask，排除 prompt tokens 和 padding tokens。 | 新增 mask 单元测试，覆盖 right padding、left padding、不同 prompt length、短 response、全 padding 边界。 | TODO |
 | Day 5 | 实现 `compute_token_logprobs`，并明确 logits/target shift 约定。用 `log_softmax + gather` 得到生成 token 的逐 token logprob 和 sequence logprob。 | 新增 logprob 单元测试，使用小型 fake logits 和手算结果对齐；覆盖 mask 聚合和 padding token 不参与 sequence logprob。 | TODO |
