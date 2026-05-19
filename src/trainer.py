@@ -72,6 +72,7 @@ class TrainingConfig:
 
 
 def load_training_config(path: str | Path) -> dict[str, Any]:
+    """读取训练 YAML 配置，并确认顶层结构是 mapping。"""
     with Path(path).open("r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
     if not isinstance(config, dict):
@@ -101,6 +102,13 @@ def build_reference_model(policy_runner: ModelRunner) -> torch.nn.Module:
 
 
 def flatten_rollouts(rollouts: list[PromptRollout]) -> list[GeneratedCompletion]:
+    """把按 prompt 分组的 rollout 展平成 completion 列表。
+
+    `generate_group_rollouts` 的输出结构是 `B` 个 `PromptRollout`，每个里面有
+    `G` 个 completion。训练前向需要把这些 completion 拼成一个 batch，所以这里
+    返回长度为 `B * G` 的平铺列表，并保留每个 completion 自己的 prompt_id 和
+    completion_id。
+    """
     completions: list[GeneratedCompletion] = []
     for rollout in rollouts:
         completions.extend(rollout.completions)
@@ -108,6 +116,15 @@ def flatten_rollouts(rollouts: list[PromptRollout]) -> list[GeneratedCompletion]
 
 
 def build_advantage_lookup(rollouts: list[PromptRollout]) -> dict[tuple[str, int], tuple[float, float]]:
+    """为每个 completion 计算并索引 reward/advantage。
+
+    对每个 `PromptRollout` 内部的 G 个 reward 调用
+    `compute_group_advantages`。返回的 dict 用
+    `(prompt_id, completion_id)` 做 key，value 是 `(reward, advantage)`。
+
+    这里要求每个 completion 已经有 reward；缺 reward 直接报错，避免训练时静默
+    使用错误的 0 reward。
+    """
     lookup: dict[tuple[str, int], tuple[float, float]] = {}
     for rollout in rollouts:
         reward_values: list[float] = []
@@ -135,6 +152,20 @@ def tokenize_rollout_batch(
     advantage_lookup: dict[tuple[str, int], tuple[float, float]],
     device: torch.device,
 ) -> TokenizedRolloutBatch:
+    """把 rollout completions 转成模型训练用的 padded tensor batch。
+
+    这里不重新 tokenize `prompt + response` 文本，而是使用 rollout 阶段保存的
+    `completion.input_ids`。原因是训练必须复用模型生成时的 chat-template prompt
+    token ids 和 response token ids，避免 token 序列与采样时不一致。
+
+    输出内容：
+    - `input_ids`: padding 后的完整序列 `[prompt tokens, response tokens, pad...]`。
+    - `attention_mask`: 根据真实序列长度构造，真实 token 为 1，padding token 为 0。
+    - `labels`: 当前等于 `input_ids`，后续在 `compute_model_logprobs` 中做 causal shift。
+    - `prompt_lengths`: 每条样本 prompt 部分的 token 数，用来构造 response mask。
+    - `response_lengths`: 每条样本 response 部分的 token 数，包含生成出的 EOS token。
+    - `rewards` / `advantages`: 与 completion batch 顺序一一对应。
+    """
     if tokenizer.pad_token_id is None:
         raise ValueError("tokenizer.pad_token_id must be set before training.")
     if not completions:
@@ -142,6 +173,8 @@ def tokenize_rollout_batch(
 
     input_id_rows: list[torch.Tensor] = []
     prompt_lengths: list[int] = []
+    response_lengths: list[int] = []
+    sequence_lengths: list[int] = []
     for completion in completions:
         if completion.input_ids is None:
             raise ValueError(
@@ -153,13 +186,18 @@ def tokenize_rollout_batch(
             )
         input_id_rows.append(torch.tensor(completion.input_ids, dtype=torch.long))
         prompt_lengths.append(completion.prompt_token_count)
+        response_lengths.append(len(completion.response_token_ids))
+        sequence_lengths.append(len(completion.input_ids))
 
     input_ids = torch.nn.utils.rnn.pad_sequence(
         input_id_rows,
         batch_first=True,
         padding_value=tokenizer.pad_token_id,
     ).to(device)
-    attention_mask = (input_ids != tokenizer.pad_token_id).long()
+    sequence_lengths_tensor = torch.tensor(sequence_lengths, dtype=torch.long, device=device)
+    positions = torch.arange(input_ids.shape[1], device=device).unsqueeze(0)
+    attention_mask = (positions < sequence_lengths_tensor.unsqueeze(1)).long()#形状是[batch_size, max_seq_len]，
+                                                                              #对input_ids mask(prompt+response)
 
     rewards: list[float] = []
     advantages: list[float] = []
@@ -173,6 +211,7 @@ def tokenize_rollout_batch(
         attention_mask=attention_mask,
         labels=input_ids.clone(),
         prompt_lengths=torch.tensor(prompt_lengths, dtype=torch.long, device=device),
+        response_lengths=torch.tensor(response_lengths, dtype=torch.long, device=device),
         advantages=torch.tensor(advantages, dtype=torch.float32, device=device),
         rewards=torch.tensor(rewards, dtype=torch.float32, device=device),
         prompt_ids=[completion.prompt_id for completion in completions],
@@ -185,9 +224,20 @@ def compute_model_logprobs(
     rollout_batch: TokenizedRolloutBatch,
     pad_token_id: int,
 ) -> LogProbResult:
+    """计算当前 model 对 rollout response tokens 的 logprob。
+
+    先用 `build_response_mask` 得到完整序列上的 response-only mask，再做 causal LM
+    shift：
+    - `logits[:, :-1, :]` 预测下一个 token。
+    - `labels[:, 1:]` 是被预测的目标 token。
+    - `response_mask[:, 1:]` 与 shifted labels 对齐。
+
+    因此 `compute_token_logprobs` 收到的是已经对齐好的 logits/labels/mask。
+    """
     response_mask = build_response_mask(
         rollout_batch.input_ids,
         rollout_batch.prompt_lengths,
+        rollout_batch.response_lengths,
         pad_token_id=pad_token_id,
     )
     outputs = model(
@@ -209,6 +259,18 @@ def run_train_step(
     train_cfg: TrainingConfig,
     step: int,
 ) -> TrainMetrics:
+    """执行一个最小 GRPO update step。
+
+    数据流：
+    1. 用当前 policy 生成每个 prompt 的 group rollouts。
+    2. 计算每个 prompt group 内的 reward 和 advantage。
+    3. 把 completions padding 成一个训练 batch。
+    4. 捕获 old policy logprobs，并重新计算带梯度的 new policy logprobs。
+    5. 可选计算 reference model 的 k3 KL。
+    6. 调用 `compute_grpo_loss`，反向传播并执行一次 Adam step。
+
+    这个函数负责串联流程；GRPO 数学细节仍在各核心函数中实现。
+    """
     policy_runner.model.train()
     rollouts = generate_group_rollouts(policy_runner, examples, train_cfg.group_size)
     advantage_lookup = build_advantage_lookup(rollouts)
@@ -274,6 +336,12 @@ def run_train_step(
 
 
 def train(config: dict[str, Any]) -> list[TrainMetrics]:
+    """运行最小训练循环，并把每步 metrics 写入 `metrics.jsonl`。
+
+    该函数负责加载数据、模型、可选 reference model、Adam optimizer，并循环调用
+    `run_train_step`。当前版本不做 checkpoint/resume/scheduler，目标是验证核心
+    GRPO 训练闭环能跑通。
+    """
     train_cfg = TrainingConfig.from_config(config)
     examples = load_gsm8k_jsonl(
         train_cfg.train_data_path,

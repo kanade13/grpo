@@ -25,5 +25,22 @@ def compute_group_advantages(
       advantages。
     - advantage 不需要梯度，通常应从 reward 标量构造或显式 detach。
     """
-    raise NotImplementedError("核心 advantage 逻辑留给手写实现。")
+    #raise NotImplementedError("核心 advantage 逻辑留给手写实现。")
+    if rewards.ndim != 1:
+        raise ValueError(f"Expected a 1D tensor, but got shape {tuple(rewards.shape)}")
+    rewards = rewards.detach()
+    advantages = torch.zeros_like(rewards)
+    mean=rewards.mean(dim=0)
+    std=rewards.std(dim=0,correction=0)
+    if std <= eps:
+        advantages = torch.zeros_like(rewards)
+    else:
+        advantages = (rewards - mean) / (std + eps)
+    return GroupAdvantage(
+        prompt_id=prompt_id,
+        rewards=rewards,
+        mean=mean,
+        std=std,
+        advantages=advantages,
+    )
 

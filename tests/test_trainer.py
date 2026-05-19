@@ -119,7 +119,46 @@ def test_tokenize_rollout_batch_uses_rollout_token_ids() -> None:
     assert batch.attention_mask.tolist() == [[1, 1, 1, 1], [1, 1, 0, 0]]
     assert batch.labels.tolist() == batch.input_ids.tolist()
     assert batch.prompt_lengths.tolist() == [2, 1]
+    assert batch.response_lengths.tolist() == [2, 1]
     assert batch.advantages.tolist() == [0.5, -0.5]
+
+
+def test_tokenize_rollout_batch_keeps_real_eos_when_it_matches_pad_token_id() -> None:
+    tokenizer = FakeTokenizer(pad_token_id=0)
+    completions = [
+        GeneratedCompletion(
+            prompt_id="prompt-0",
+            completion_id=0,
+            prompt="chat-template prompt",
+            response="response",
+            response_token_ids=[3, 0],
+            attention_mask=[1, 1],
+            input_ids=[1, 2, 3, 0],
+            prompt_token_count=2,
+            reward=RewardResult(1.0, 1.0, 0.0, 0.0, "3", True),
+        ),
+        GeneratedCompletion(
+            prompt_id="prompt-1",
+            completion_id=0,
+            prompt="chat-template prompt 2",
+            response="response",
+            response_token_ids=[6],
+            attention_mask=[1],
+            input_ids=[5, 6],
+            prompt_token_count=1,
+            reward=RewardResult(0.0, 0.0, 0.0, 0.0, "6", False),
+        ),
+    ]
+    advantage_lookup = {
+        ("prompt-0", 0): (1.0, 0.5),
+        ("prompt-1", 0): (0.0, -0.5),
+    }
+
+    batch = tokenize_rollout_batch(tokenizer, completions, advantage_lookup, device=torch.device("cpu"))
+
+    assert batch.input_ids.tolist() == [[1, 2, 3, 0], [5, 6, 0, 0]]
+    assert batch.attention_mask.tolist() == [[1, 1, 1, 1], [1, 1, 0, 0]]
+    assert batch.response_lengths.tolist() == [2, 1]
 
 
 def test_compute_model_logprobs_shifts_logits_labels_and_mask(monkeypatch) -> None:
@@ -140,6 +179,7 @@ def test_compute_model_logprobs_shifts_logits_labels_and_mask(monkeypatch) -> No
         attention_mask=torch.tensor([[1, 1, 1, 0]]),
         labels=torch.tensor([[1, 2, 3, 0]]),
         prompt_lengths=torch.tensor([1]),
+        response_lengths=torch.tensor([2]),
         advantages=torch.tensor([1.0]),
         rewards=torch.tensor([1.0]),
         prompt_ids=["prompt-0"],
@@ -187,6 +227,7 @@ def test_run_train_step_wires_core_functions(monkeypatch) -> None:
         attention_mask=torch.tensor([[1]]),
         labels=torch.tensor([[1]]),
         prompt_lengths=torch.tensor([0]),
+        response_lengths=torch.tensor([1]),
         advantages=torch.tensor([1.0]),
         rewards=torch.tensor([1.0]),
         prompt_ids=["prompt-0"],

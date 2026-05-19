@@ -27,5 +27,18 @@ def compute_token_logprobs(
     - 通常 logits 和 target_ids 要对齐到“预测下一个 token”的位置。
       如果上游传入的是完整 input_ids，需要先做 shift。
     """
-    raise NotImplementedError("核心 logprob 逻辑留给手写实现。")
+    """
+    input_ids: p0 p1 p2 p3 p4 r0 r1 r2
+    logits     x0 x1 x2 x3 x4 x5 x6 x7
+    应该选:                 1  1  1
 
+    """
+    log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+    token_logprobs = log_probs.gather(dim=-1, index=target_ids.unsqueeze(-1)).squeeze(-1)
+    mask = mask.to(dtype=token_logprobs.dtype)
+    sequence_logprobs = (token_logprobs * mask).sum(dim=1)#这里因为是log概率，所以是相加，还挺方便
+    return LogProbResult(
+        token_logprobs=token_logprobs,
+        sequence_logprobs=sequence_logprobs,
+        mask=mask,
+    )

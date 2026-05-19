@@ -127,6 +127,7 @@ class TokenizedRolloutBatch:
     attention_mask: torch.Tensor
     labels: torch.Tensor
     prompt_lengths: torch.Tensor
+    response_lengths: torch.Tensor
     advantages: torch.Tensor
     rewards: torch.Tensor
     prompt_ids: list[str]
